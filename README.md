@@ -1,254 +1,223 @@
-# AH Shopping Agent
+# AH购物代理
 
-An intelligent shopping agent built with LlamaIndex that can automatically scrape Albert Heijn (AH) bonus products, use AI to select items by category, and automate adding them to your shopping cart.
+一个简化的购物代理，用于爬取AH.nl打折商品、管理购物清单历史，并生成智能购物bucket分类。
 
-## Features
+## 功能
 
-- **🤖 AI-Powered Product Selection**: Uses LlamaIndex with LLM (Ollama/OpenAI) to intelligently select products
-- **🕷️ Web Scraping**: Automatically scrapes AH bonus page for current deals
-- **🛒 Cart Automation**: Uses Selenium to automatically add selected products to cart
-- **📊 Smart Categorization**: Categorizes products into meat, vegetables, fruits using Dutch keywords
-- **⚙️ Configurable**: Flexible configuration for product counts, LLM providers, and automation settings
-- **🔄 Robust Error Handling**: Multiple selector strategies and fallbacks for reliable automation
+- 🕷️ **爬取打折商品**: 自动爬取ah.nl/bonus页面的所有打折商品信息
+- 📊 **商品总结**: 自动总结所有打折商品，按折扣分类
+- 📋 **购物清单历史数据库**: 本地JSON数据库，支持索引和多种查询方式
+  - 按日期查询（精确日期或日期范围）
+  - 按商品名称查询
+  - 按类别查询
+  - 按备注关键词查询
+  - 综合搜索
+  - 统计信息（最常购买商品、平均商品数等）
+- 🤖 **智能分类**: 根据base_prompt生成base bucket，将商品分类到不同类别
+- 🛒 **购物车自动化**: 优雅的自动化接口，一键将商品添加到AH购物车
+  - 支持批量添加商品
+  - 自动处理登录和cookie
+  - 支持从bucket直接添加
+  - 进度回调和错误处理
 
-## Prerequisites
+## 安装
 
-- **Python 3.10 or later**
-- **Chrome browser** (for Selenium automation)
-- **LLM Backend**: Either:
-  - Ollama with llama3.2 model installed locally, OR
-  - OpenAI API key for GPT models
-
-### Setting up Ollama (Recommended)
+### 使用uv (推荐)
 
 ```bash
-# Install Ollama
-curl -fsSL https://ollama.ai/install.sh | sh
+# 安装uv (如果还没有)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Pull the llama3.2 model
-ollama pull llama3.2
+# 克隆项目
+git clone <repository-url>
+cd shoppint_agent
 
-# Start Ollama service
-ollama serve
+# 安装依赖
+uv sync
+
+# 运行
+uv run python main.py
 ```
 
-## Installation
-
-### Option 1: Poetry (Recommended)
+### 手动安装
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd shopping_agent
-
-# Install dependencies using Poetry
-poetry install
-
-# Activate the virtual environment
-poetry shell
-```
-
-### Option 2: pip
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd shopping_agent
-
-# Create virtual environment
+# 创建虚拟环境
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# Install dependencies
-pip install -r requirements.txt
+# 安装依赖
+pip install -r requirements.txt  # 或直接使用 uv pip install
+
+# 运行
+python main.py
 ```
 
-## Usage
+## 配置
 
-### Quick Start
+### 环境变量
 
 ```bash
-# Run with default settings (3 meat, 5 vegetables, 3 fruits)
-python shopping_agent.py
-
-# Or run the example script
-python example.py
+export ANTHROPIC_API_KEY=your_api_key_here
 ```
 
-### Command Line Options
+或者在代码中直接设置（不推荐用于生产环境）。
+
+## 使用方法
+
+### 基本使用
 
 ```bash
-# Use OpenAI instead of Ollama
-python shopping_agent.py --llm openai --model gpt-4
-
-# Customize product counts
-python shopping_agent.py --meat 2 --vegetables 4 --fruits 2
-
-# Run in headless mode (hide browser)
-python shopping_agent.py --headless
-
-# Combine options
-python shopping_agent.py --llm ollama --model llama3.2 --meat 1 --vegetables 3 --fruits 1
+python main.py
 ```
 
-### Programmatic Usage
+程序会依次执行：
+1. 爬取ah.nl/bonus页面的所有打折商品
+2. 生成商品总结
+3. 显示最近10次购物清单
+4. 根据base_prompt生成base bucket分类
+5. 可选择保存购物清单到历史
+
+### 代码使用
 
 ```python
-import asyncio
-from shopping_agent import AHShoppingAgent
-from config import AgentConfig
+from config import Config
+from scraper import AHBonusScraper
+from history import ShoppingHistory
+from bucket_generator import BucketGenerator
 
-# Create custom configuration
-config = AgentConfig(
-    llm_provider="ollama",  # or "openai"
-    model_name="llama3.2",  # or "gpt-4"
-    meat_count=3,
-    vegetable_count=5,
-    fruit_count=3,
-    headless_automation=False  # Show browser during automation
+# 初始化
+config = Config()
+scraper = AHBonusScraper(config)
+history = ShoppingHistory()
+
+# Scrape products
+products = scraper.scrape_bonus_products()
+
+# Generate summary
+summary = scraper.summarize_products(products)
+
+# Get history
+recent_lists = history.get_recent_lists(10)
+
+# Generate bucket
+generator = BucketGenerator(api_key="your_key")
+buckets = generator.generate_buckets(
+    products=products,
+    user_requirements="Buy healthy ingredients for a week"
 )
 
-# Create and run agent
-agent = AHShoppingAgent(config=config)
-result = await agent.run_shopping_workflow()
+# Query shopping lists
+# Query by product name
+results = history.query_by_product("melk")
+print(f"Found {len(results)} shopping lists containing 'melk'")
+
+# Query by date
+results = history.query_by_date(date_str="2024-01-15")
+results = history.query_by_date(start_date="2024-01-01", end_date="2024-01-31")
+
+# Query by category
+results = history.query_by_category("meat")
+
+# Comprehensive search
+results = history.search("kip")
+
+# Get statistics
+stats = history.get_statistics()
+print(f"Total shopping lists: {stats['total_lists']}")
+print(f"Most frequently purchased products: {stats['top_products'][:5]}")
 ```
 
-### Environment Variables
-
-You can configure the agent using environment variables:
-
-```bash
-export LLM_PROVIDER=ollama
-export MODEL_NAME=llama3.2
-export MEAT_COUNT=3
-export VEGETABLE_COUNT=5
-export FRUIT_COUNT=3
-export HEADLESS_SCRAPING=true
-export HEADLESS_AUTOMATION=false
-export OPENAI_API_KEY=your_api_key_here  # Only needed for OpenAI
-```
-
-Then use:
+### 购物车自动化
 
 ```python
-config = AgentConfig.from_env()
-agent = AHShoppingAgent(config=config)
+from cart_automation import add_to_cart_simple, add_buckets_to_cart, CartAutomation
+
+# Method 1: Simple add products
+products = [
+    {"title": "AH Halfvolle melk", "product_url": "https://..."},
+    {"title": "AH Eieren", "product_url": "https://..."}
+]
+result = add_to_cart_simple(products)
+print(f"Successfully added {result.added_count} products")
+
+# Method 2: Add from buckets (recommended)
+result = add_buckets_to_cart(buckets)
+print(f"Successfully added {result.added_count} products")
+
+# Method 3: Use context manager (more flexible)
+with CartAutomation() as cart:
+    result = cart.add_from_buckets(buckets)
+    if result.success:
+        cart.view_cart()  # View cart
 ```
 
-## How It Works
-
-1. **🔍 Product Scraping**: 
-   - Navigates to AH bonus page using Selenium
-   - Extracts product information (title, price, image, URL)
-   - Categorizes products using Dutch keyword matching
-
-2. **🤖 AI Selection**:
-   - Uses LlamaIndex ReAct agent with custom tools
-   - LLM intelligently selects random products from each category
-   - Respects specified counts for meat, vegetables, and fruits
-
-3. **🛒 Cart Automation**:
-   - Opens browser and navigates to each product page
-   - Finds and clicks "Add to Cart" buttons using multiple selector strategies
-   - Provides detailed feedback on success/failure for each product
-
-## Configuration Options
-
-The `AgentConfig` class supports extensive customization:
-
-```python
-@dataclass
-class AgentConfig:
-    # LLM Settings
-    llm_provider: str = "ollama"  # "ollama" or "openai"
-    model_name: str = "llama3.2"
-    openai_api_key: Optional[str] = None
-    
-    # Product Selection
-    meat_count: int = 3
-    vegetable_count: int = 5
-    fruit_count: int = 3
-    max_products_to_scrape: int = 50
-    
-    # Automation Settings
-    headless_scraping: bool = True
-    headless_automation: bool = False
-    page_load_timeout: int = 10
-    automation_delay: float = 2.0
-    
-    # Custom keywords for categorization
-    meat_keywords: list = [...]
-    vegetable_keywords: list = [...]
-    fruit_keywords: list = [...]
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Chrome Driver Issues**:
-   - The script automatically downloads ChromeDriver
-   - Ensure Chrome browser is installed and up to date
-
-2. **LLM Connection Issues**:
-   - For Ollama: Make sure `ollama serve` is running and model is pulled
-   - For OpenAI: Verify your API key is set correctly
-
-3. **Website Changes**:
-   - AH may update their website structure
-   - The script uses multiple selector strategies for robustness
-   - Check for updates if scraping fails
-
-4. **Network Issues**:
-   - Ensure stable internet connection
-   - Consider increasing `automation_delay` for slower connections
-
-### Debug Mode
-
-Run with verbose output to see detailed logs:
-
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-```
-
-## Architecture
+## 项目结构
 
 ```
-shopping_agent.py     # Main agent class with LlamaIndex integration
-├── AHShoppingAgent   # Core agent class
-├── scrape_ah_bonus_products()  # Web scraping functionality
-├── create_product_selection_tool()  # LLM tool for product selection
-├── create_cart_automation_tool()    # LLM tool for cart automation
-└── run_shopping_workflow()  # Complete workflow orchestration
-
-config.py            # Configuration management
-├── AgentConfig      # Dataclass for all settings
-└── Environment variable support
-
-example.py           # Usage examples and demo script
+shoppint_agent/
+├── main.py              # 主程序入口
+├── config.py            # 配置管理
+├── scraper.py           # 爬虫模块
+├── history.py           # 购物清单历史数据库（支持索引和查询）
+├── bucket_generator.py  # bucket生成器
+├── cart_automation.py    # 购物车自动化模块
+├── query_examples.py    # 查询功能示例
+├── cart_examples.py     # 购物车使用示例
+├── example_usage.py     # 使用示例
+├── test_shopping_agent.ipynb  # 测试notebook
+├── pyproject.toml      # 项目配置（uv）
+└── README.md           # 说明文档
 ```
 
-## Dependencies
+## 数据文件
 
-- **LlamaIndex**: Core AI agent framework
-- **Selenium**: Web browser automation
-- **BeautifulSoup**: HTML parsing
-- **Pandas/NumPy**: Data processing
-- **Requests**: HTTP client
-- **WebDriver Manager**: Automatic ChromeDriver management
+- `shopping_history.json`: 购物清单历史数据库（JSON格式，包含索引）
+  - 自动索引：按日期、商品名称、类别
+  - 支持快速查询和搜索
+- `products_cache.json`: 商品数据缓存
 
-## Contributing
+### 数据库结构
 
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Submit a pull request
+```json
+{
+  "version": "1.0",
+  "metadata": {
+    "created_at": "2024-01-01T00:00:00",
+    "last_updated": "2024-01-15T00:00:00"
+  },
+  "lists": [
+    {
+      "id": "uuid",
+      "date": "2024-01-15T10:30:00",
+      "items": [...],
+      "notes": "Notes",
+      "total_items": 10
+    }
+  ],
+  "indexes": {
+    "by_date": {...},
+    "by_product": {...},
+    "by_category": {...}
+  }
+}
+```
+
+## 依赖
+
+- `beautifulsoup4`: HTML解析
+- `requests`: HTTP请求
+- `selenium`: 浏览器自动化
+- `webdriver-manager`: Chrome驱动管理
+- `anthropic`: Claude API
+
+## 注意事项
+
+1. 需要安装Chrome浏览器
+2. 首次运行会自动下载ChromeDriver
+3. 爬取过程可能需要几分钟时间
+4. 需要Anthropic API key才能使用bucket生成功能
 
 ## License
 
-[Add your license here]
-
-## Disclaimer
-
-This tool is for educational purposes. Please respect Albert Heijn's terms of service and use responsibly. The automated cart functionality should be used with caution and human oversight.
+MIT
