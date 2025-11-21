@@ -1,6 +1,9 @@
 import os
 from dataclasses import dataclass
 from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 @dataclass
 class Config:
@@ -26,7 +29,8 @@ class Config:
     
     @classmethod
     def from_env(cls) -> 'Config':
-        """Create configuration from environment variables"""
+        """Create configuration from .env file or environment variables"""
+        api_key = os.getenv("ANTHROPIC_API_KEY")
         return cls(
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
+            anthropic_api_key=api_key,
         )

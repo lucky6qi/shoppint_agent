@@ -30,9 +30,15 @@ Bucket classification rules:
 Please generate reasonable product lists for each bucket based on user requirements and discount product information."""
     
     def generate_buckets(self, products: List[Dict[str, Any]], 
-                        user_requirements: str = "",
+                        user_prompt: str = "",
                         recent_history: Optional[List[Dict[str, Any]]] = None) -> Dict[str, List[Dict[str, Any]]]:
-        """Generate base bucket"""
+        """Generate base bucket
+        
+        Args:
+            products: List of available products
+            user_prompt: Combined shopping prompt (can include requirements and must-buy items)
+            recent_history: Recent shopping history
+        """
         
         # Prepare product list
         products_text = "\n".join([
@@ -48,6 +54,50 @@ Please generate reasonable product lists for each bucket based on user requireme
                 items = hist.get("items", [])
                 history_text += f"- Purchased {len(items)} items\n"
         
+        # Parse user prompt to extract requirements and must-buy items
+        user_requirements = ""
+        must_buy_items = ""
+        
+        if user_prompt:
+            # Try to parse structured format (Shopping Requirements: ... Must-buy Items: ...)
+            if "Shopping Requirements:" in user_prompt or "Must-buy Items:" in user_prompt:
+                lines = user_prompt.split('\n')
+                current_section = None
+                requirements_lines = []
+                must_buy_lines = []
+                
+                for line in lines:
+                    if "Shopping Requirements:" in line:
+                        current_section = "requirements"
+                        req_text = line.split("Shopping Requirements:", 1)[1].strip()
+                        if req_text:
+                            requirements_lines.append(req_text)
+                    elif "Must-buy Items:" in line:
+                        current_section = "must_buy"
+                        must_text = line.split("Must-buy Items:", 1)[1].strip()
+                        if must_text:
+                            must_buy_lines.append(must_text)
+                    elif current_section == "requirements" and line.strip():
+                        requirements_lines.append(line.strip())
+                    elif current_section == "must_buy" and line.strip():
+                        must_buy_lines.append(line.strip())
+                
+                user_requirements = "\n".join(requirements_lines) if requirements_lines else ""
+                must_buy_items = "\n".join(must_buy_lines) if must_buy_lines else ""
+            else:
+                # If no structured format, treat entire prompt as requirements
+                user_requirements = user_prompt
+        
+        # Build user prompt section
+        user_prompt_section = ""
+        if must_buy_items:
+            user_prompt_section = f"""
+IMPORTANT - Must-buy items:
+{must_buy_items}
+
+You MUST include these items in the shopping list. Match the quantities and specifications as closely as possible from the available products.
+"""
+        
         # Build complete prompt
         prompt = f"""{self.base_prompt}
 
@@ -59,9 +109,13 @@ Available discount products:
 User requirements:
 {user_requirements or "Buy healthy ingredients for a week, including meat, vegetables, fruits, and essentials"}
 
-Please select appropriate products for each bucket, maximum 10 products per bucket. Return JSON format:
+{user_prompt_section}
+
+Please select appropriate products for each bucket, maximum 10 products per bucket. 
+IMPORTANT: If user_prompt is provided, you MUST include those items first.
+Return JSON format:
 {{
-  "essentials": [{{"title": "Product name", "price": "Price", "reason": "Selection reason"}}],
+  "essentials": [{{"title": "Product name", "price": "Price", "quantity": 1, "reason": "Selection reason"}}],
   "meat": [...],
   "vegetables": [...],
   "fruit": [...],
@@ -76,7 +130,7 @@ Please select appropriate products for each bucket, maximum 10 products per buck
             # ═══════════════════════════════════════════════════════════
             # This is where the LLM is called to generate intelligent bucket classification
             message = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",  # LLM Model
+                model="claude-haiku-4-5",  # LLM Model
                 max_tokens=4000,
                 messages=[{
                     "role": "user",
@@ -102,10 +156,17 @@ Please select appropriate products for each bucket, maximum 10 products per buck
                         # Find complete information from products
                         product = self._find_product(products, item.get("title", ""))
                         if product:
-                            result[bucket_name].append({
+                            product_copy = {
                                 **product,
                                 "reason": item.get("reason", "")
-                            })
+                            }
+                            # Priority: user-specified quantity > promotion_quantity > 1
+                            if "quantity" in item:
+                                product_copy["quantity"] = item["quantity"]
+                            elif product.get("promotion_quantity", 1) > 1:
+                                # Use promotion quantity if no user-specified quantity
+                                product_copy["quantity"] = product.get("promotion_quantity", 1)
+                            result[bucket_name].append(product_copy)
                 
                 return result
             else:
@@ -182,7 +243,9 @@ Please select appropriate products for each bucket, maximum 10 products per buck
             result += f"📦 {display_name} ({len(items)} items):\n"
             
             for item in items:
-                result += f"   - {item['title']} | {item['price']}\n"
+                quantity = item.get("quantity", 1)
+                quantity_text = f" x{quantity}" if quantity > 1 else ""
+                result += f"   - {item['title']}{quantity_text} | {item['price']}\n"
                 if item.get("reason"):
                     result += f"     Reason: {item['reason']}\n"
             

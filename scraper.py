@@ -2,6 +2,7 @@
 import json
 import time
 import os
+import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from selenium import webdriver
@@ -66,6 +67,15 @@ class AHBonusScraper:
             print(f"✅ Products cached to {self.config.products_cache_file}")
         except Exception as e:
             print(f"⚠️ Error saving cache: {e}")
+    
+    def delete_cache(self):
+        """Delete cache file completely"""
+        if os.path.exists(self.config.products_cache_file):
+            try:
+                os.remove(self.config.products_cache_file)
+                print(f"🗑️  Deleted cache file: {self.config.products_cache_file}")
+            except Exception as e:
+                print(f"⚠️ Error deleting cache file: {e}")
     
     def _try_lightweight_scrape(self) -> Optional[List[Dict[str, Any]]]:
         """Try to scrape using lightweight requests + BeautifulSoup"""
@@ -155,6 +165,22 @@ class AHBonusScraper:
                 if product_url and not product_url.startswith("http"):
                     product_url = self.config.ah_base_url + product_url
             
+            # Extract promotion quantity (e.g., "2 voor 3.99" -> quantity = 2)
+            promotion_quantity = 1
+            try:
+                shield_elem = element.find(attrs={'data-testid': 'product-shield'})
+                if shield_elem:
+                    shield_text_elem = shield_elem.find(class_='shield_text__kNeiW')
+                    if shield_text_elem:
+                        shield_text = shield_text_elem.get_text(strip=True)
+                        # Parse "2 voor 3.99" or "4 voor 5.99" etc.
+                        import re
+                        match = re.search(r'(\d+)\s+voor', shield_text, re.IGNORECASE)
+                        if match:
+                            promotion_quantity = int(match.group(1))
+            except:
+                pass
+            
             return {
                 "title": title,
                 "price": price_info.get("formatted_price", "Unknown"),
@@ -164,6 +190,7 @@ class AHBonusScraper:
                 "description": description,
                 "image_url": image_url,
                 "product_url": product_url,
+                "promotion_quantity": promotion_quantity,  # e.g., 2 for "2 voor 3.99"
             }
         except:
             return None
@@ -239,13 +266,14 @@ class AHBonusScraper:
         Returns:
             List of product dictionaries
         """
-        print("🔍 Starting to scrape AH.nl/bonus page...")
-        
-        # Step 1: Check cache
+        # Step 1: Check cache - if present, skip scraping
         if use_cache:
             cached_products = self._load_cache()
             if cached_products:
+                print(f"✅ Using {len(cached_products)} cached products (skipping scrape)")
                 return cached_products
+        
+        print("🔍 Starting to scrape AH.nl/bonus page...")
         
         # Step 2: Try lightweight method first (faster)
         if prefer_lightweight:
@@ -274,12 +302,14 @@ class AHBonusScraper:
             
             # Strategy 1: Try multiple selectors for Accept button
             accept_selectors = [
+                # By data-testid (most reliable - matches current AH.nl structure)
+                "//button[@data-testid='accept-cookies']",
                 # By text content (most common)
                 "//button[contains(text(), 'Accepteren')]",
                 "//button[contains(text(), 'Accept')]",
                 "//button[normalize-space(text())='Accepteren']",
                 "//button[normalize-space(text())='Accept']",
-                # By data attributes
+                # By data attributes (legacy)
                 "//button[@data-testhook='cookie-consent-accept']",
                 "//button[@data-testid='cookie-accept']",
                 # By class names that might contain accept
@@ -311,19 +341,29 @@ class AHBonusScraper:
                 try:
                     # Look for common cookie dialog containers
                     dialog_selectors = [
+                        # Current AH.nl structure - data-testid="cookie-popup"
+                        "//dialog[@data-testid='cookie-popup']",
+                        "//div[@data-testid='cookie-popup']",
+                        # Legacy selectors
                         "//div[contains(@class, 'cookie')]",
                         "//div[contains(@class, 'consent')]",
                         "//div[@role='dialog']",
                         "//div[contains(@id, 'cookie')]",
+                        "//dialog[contains(@class, 'modal')]",
                     ]
                     
                     for dialog_selector in dialog_selectors:
                         try:
                             dialog = self.driver.find_element(By.XPATH, dialog_selector)
                             if dialog.is_displayed():
-                                # Find accept button inside the dialog
+                                # First try data-testid selector (most reliable)
                                 accept_buttons = dialog.find_elements(By.XPATH, 
-                                    ".//button[contains(text(), 'Accepteren') or contains(text(), 'Accept')]")
+                                    ".//button[@data-testid='accept-cookies']")
+                                if not accept_buttons:
+                                    # Fallback to text-based search
+                                    accept_buttons = dialog.find_elements(By.XPATH, 
+                                        ".//button[contains(text(), 'Accepteren') or contains(text(), 'Accept')]")
+                                
                                 if accept_buttons:
                                     accept_button = accept_buttons[0]
                                     self.driver.execute_script("arguments[0].scrollIntoView(true);", accept_button)
@@ -341,14 +381,24 @@ class AHBonusScraper:
             # Strategy 3: Try JavaScript click if regular click doesn't work
             if not cookie_accepted:
                 try:
-                    cookie_button = WebDriverWait(self.driver, 3).until(
-                        EC.presence_of_element_located((By.XPATH, 
-                            "//button[contains(text(), 'Accepteren') or contains(text(), 'Accept')]"))
-                    )
-                    self.driver.execute_script("arguments[0].click();", cookie_button)
-                    print("✅ Cookies accepted (via JavaScript)")
-                    cookie_accepted = True
-                    time.sleep(1)
+                    # Try data-testid first, then fallback to text
+                    cookie_button = None
+                    try:
+                        cookie_button = WebDriverWait(self.driver, 3).until(
+                            EC.presence_of_element_located((By.XPATH, 
+                                "//button[@data-testid='accept-cookies']"))
+                        )
+                    except:
+                        cookie_button = WebDriverWait(self.driver, 3).until(
+                            EC.presence_of_element_located((By.XPATH, 
+                                "//button[contains(text(), 'Accepteren') or contains(text(), 'Accept')]"))
+                        )
+                    
+                    if cookie_button:
+                        self.driver.execute_script("arguments[0].click();", cookie_button)
+                        print("✅ Cookies accepted (via JavaScript)")
+                        cookie_accepted = True
+                        time.sleep(1)
                 except:
                     pass
             
@@ -492,6 +542,19 @@ class AHBonusScraper:
                     except:
                         pass
                     
+                    # Extract promotion quantity (e.g., "2 voor 3.99" -> quantity = 2)
+                    promotion_quantity = 1
+                    try:
+                        shield_elem = element.find_element(By.CSS_SELECTOR, 
+                            "[data-testid='product-shield'] .shield_text__kNeiW, .shield_text__kNeiW")
+                        shield_text = shield_elem.text.strip()
+                        # Parse "2 voor 3.99" or "4 voor 5.99" etc.
+                        match = re.search(r'(\d+)\s+voor', shield_text, re.IGNORECASE)
+                        if match:
+                            promotion_quantity = int(match.group(1))
+                    except:
+                        pass
+                    
                     product = {
                         "title": title,
                         "price": price_info.get("formatted_price", "Unknown"),
@@ -501,6 +564,7 @@ class AHBonusScraper:
                         "description": description or title,
                         "image_url": image_url,
                         "product_url": product_url,
+                        "promotion_quantity": promotion_quantity,  # e.g., 2 for "2 voor 3.99"
                     }
                     
                     products.append(product)

@@ -1,99 +1,113 @@
 """Usage examples"""
+import os
+import json
 from config import Config
 from scraper import AHBonusScraper
 from history import ShoppingHistory
 from bucket_generator import BucketGenerator
-import os
+from cart_automation import add_to_cart_simple, add_buckets_to_cart
 
 
-def example_scrape_only():
-    """Example 1: Scrape products only"""
-    print("=" * 50)
-    print("Example 1: Scrape AH.nl discount products")
-    print("=" * 50)
-    
+def example_scrape():
+    """Scrape products"""
     config = Config()
     scraper = AHBonusScraper(config)
-    
     products = scraper.scrape_bonus_products()
     summary = scraper.summarize_products(products)
     print(summary)
 
 
-def example_with_history():
-    """Example 2: Scrape products and view history"""
-    print("=" * 50)
-    print("Example 2: Scrape products and view history")
-    print("=" * 50)
-    
-    config = Config()
-    scraper = AHBonusScraper(config)
-    history = ShoppingHistory()
-    
-    # Scrape products
-    products = scraper.scrape_bonus_products()
-    
-    # View history
-    print("\n" + history.format_recent_lists(10))
-
-
-def example_full_workflow():
-    """Example 3: Full workflow (including bucket generation)"""
-    print("=" * 50)
-    print("Example 3: Full workflow")
-    print("=" * 50)
-    
+def example_generate_buckets():
+    """Scrape and generate buckets"""
     config = Config.from_env()
     api_key = os.getenv("ANTHROPIC_API_KEY")
     
     if not api_key:
-        print("⚠️ Need to set ANTHROPIC_API_KEY environment variable")
+        print("⚠️ Need ANTHROPIC_API_KEY")
         return
     
     scraper = AHBonusScraper(config)
     history = ShoppingHistory()
     generator = BucketGenerator(api_key)
     
-    # Scrape products
     products = scraper.scrape_bonus_products()
-    
-    # Get history
     recent_lists = history.get_recent_lists(10)
     
-    # Generate bucket
-    user_requirements = "Buy healthy ingredients for a week, including meat, vegetables, fruits"
+    user_prompt = """Shopping Requirements:
+Buy healthy ingredients for a week, including meat, vegetables, fruits"""
+    
     buckets = generator.generate_buckets(
         products=products,
-        user_requirements=user_requirements,
+        user_prompt=user_prompt,
         recent_history=recent_lists
     )
     
-    print("\n" + generator.format_buckets(buckets))
+    print(generator.format_buckets(buckets))
+
+
+def example_add_to_cart():
+    """Add products to cart"""
+    products = [
+        {"title": "AH Halfvolle melk 1 liter", "product_url": ""},
+        {"title": "AH Scharreleieren 10 stuks", "product_url": ""},
+        {"title": "AH Bruin brood", "product_url": ""}
+    ]
     
-    # Save to history
-    all_items = []
-    for bucket_items in buckets.values():
-        all_items.extend(bucket_items)
+    result = add_to_cart_simple(products, headless=False)
+    print(f"✅ Added {result.added_count} products")
+    if result.failed_products:
+        print(f"❌ Failed: {result.failed_products}")
+
+
+def example_full_workflow():
+    """Full workflow: scrape -> generate -> add to cart"""
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("⚠️ Need ANTHROPIC_API_KEY")
+        return
     
-    history.add_shopping_list(all_items, notes=user_requirements)
+    config = Config()
+    scraper = AHBonusScraper(config)
+    generator = BucketGenerator(api_key)
+    
+    # Load from cache or scrape
+    products = []
+    if os.path.exists(config.products_cache_file):
+        with open(config.products_cache_file, 'r', encoding='utf-8') as f:
+            products = json.load(f)
+        print(f"✅ Loaded {len(products)} products from cache")
+    else:
+        print("⚠️ Cache not found, scraping...")
+        products = scraper.scrape_bonus_products()
+    
+    # Generate buckets
+    user_prompt = """Shopping Requirements:
+Buy healthy ingredients for a week, including meat, vegetables, fruits, and essentials"""
+    
+    buckets = generator.generate_buckets(
+        products=products[:100],
+        user_prompt=user_prompt
+    )
+    
+    print(generator.format_buckets(buckets))
+    
+    # Add to cart
+    result = add_buckets_to_cart(buckets, headless=False)
+    print(f"✅ Complete! {result.message}")
 
 
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) > 1:
-        example_num = sys.argv[1]
-        if example_num == "1":
-            example_scrape_only()
-        elif example_num == "2":
-            example_with_history()
-        elif example_num == "3":
+        cmd = sys.argv[1]
+        if cmd == "full":
             example_full_workflow()
+        elif cmd == "cart":
+            example_add_to_cart()
+        elif cmd == "buckets":
+            example_generate_buckets()
         else:
-            print("Usage: python example_usage.py [1|2|3]")
+            example_scrape()
     else:
-        print("Select example:")
-        print("1. Scrape products only")
-        print("2. Scrape products and view history")
-        print("3. Full workflow (including bucket generation)")
-        print("\nRun: python example_usage.py [1|2|3]")
+        example_scrape()

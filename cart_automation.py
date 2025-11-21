@@ -61,15 +61,60 @@ class CartAutomation:
     
     def _accept_cookies(self):
         """Accept cookies"""
+        print("🍪 Looking for cookie consent dialog...")
+        
+        # Strategy 1: Try data-testid selector (most reliable - matches current AH.nl structure)
+        accept_selectors = [
+            "//button[@data-testid='accept-cookies']",
+            "//button[contains(text(), 'Accepteren')]",
+            "//button[contains(text(), 'Accept')]",
+        ]
+        
+        for selector in accept_selectors:
+            try:
+                cookie_button = WebDriverWait(self.driver, 3).until(
+                    EC.element_to_be_clickable((By.XPATH, selector))
+                )
+                self.driver.execute_script("arguments[0].scrollIntoView(true);", cookie_button)
+                time.sleep(0.5)
+                cookie_button.click()
+                print("✅ Cookies accepted")
+                time.sleep(1)
+                return True
+            except:
+                continue
+        
+        # Strategy 2: Try finding dialog first, then button inside
         try:
-            cookie_button = WebDriverWait(self.driver, 5).until(
-                EC.element_to_be_clickable((By.XPATH, 
-                    "//button[contains(text(), 'Accepteren') or contains(text(), 'Accept')]"))
+            dialog = WebDriverWait(self.driver, 3).until(
+                EC.presence_of_element_located((By.XPATH, 
+                    "//dialog[@data-testid='cookie-popup'] | //div[@data-testid='cookie-popup']"))
             )
-            cookie_button.click()
+            if dialog.is_displayed():
+                accept_button = dialog.find_element(By.XPATH, 
+                    ".//button[@data-testid='accept-cookies']")
+                if accept_button:
+                    self.driver.execute_script("arguments[0].scrollIntoView(true);", accept_button)
+                    time.sleep(0.5)
+                    accept_button.click()
+                    print("✅ Cookies accepted (found in dialog)")
+                    time.sleep(1)
+                    return True
+        except:
+            pass
+        
+        # Strategy 3: Try JavaScript click
+        try:
+            cookie_button = WebDriverWait(self.driver, 3).until(
+                EC.presence_of_element_located((By.XPATH, 
+                    "//button[@data-testid='accept-cookies'] | //button[contains(text(), 'Accepteren') or contains(text(), 'Accept')]"))
+            )
+            self.driver.execute_script("arguments[0].click();", cookie_button)
+            print("✅ Cookies accepted (via JavaScript)")
             time.sleep(1)
             return True
         except:
+            print("⚠️ Cookie banner not found or could not be accepted - continuing anyway")
             return False
     
     def _ensure_logged_in(self) -> bool:
@@ -117,7 +162,10 @@ class CartAutomation:
             self.driver.get(self.base_url)
             time.sleep(2)
             
-            # Find search box
+            # Accept cookies if present
+            self._accept_cookies()
+            
+            # Find search box with better waiting and interaction handling
             search_selectors = [
                 "[data-testhook='search-input']",
                 "input[placeholder*='Zoeken']",
@@ -129,32 +177,89 @@ class CartAutomation:
             search_box = None
             for selector in search_selectors:
                 try:
-                    search_box = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    if search_box.is_displayed():
-                        break
+                    # Wait for element to be present and visible
+                    search_box = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    # Wait for element to be clickable
+                    search_box = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                    )
+                    # Scroll element into view
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", search_box)
+                    time.sleep(0.5)
+                    break
                 except:
                     continue
             
             if not search_box:
                 return False
             
-            # Search for product
-            search_box.clear()
-            search_box.send_keys(product_title)
-            search_box.submit()
+            # Try multiple methods to interact with search box
+            search_success = False
+            
+            # Method 1: Normal interaction
+            try:
+                search_box.clear()
+                search_box.send_keys(product_title)
+                search_box.submit()
+                search_success = True
+            except Exception as e:
+                print(f"   ⚠️ Normal search interaction failed: {e}")
+            
+            # Method 2: JavaScript interaction if normal method failed
+            if not search_success:
+                try:
+                    self.driver.execute_script("arguments[0].value = '';", search_box)
+                    self.driver.execute_script("arguments[0].value = arguments[1];", search_box, product_title)
+                    # Trigger input event
+                    self.driver.execute_script("""
+                        arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                        arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                    """, search_box)
+                    # Try to submit
+                    try:
+                        search_box.submit()
+                    except:
+                        # If submit doesn't work, try pressing Enter
+                        from selenium.webdriver.common.keys import Keys
+                        search_box.send_keys(Keys.RETURN)
+                    search_success = True
+                except Exception as e:
+                    print(f"   ⚠️ JavaScript search interaction failed: {e}")
+            
+            if not search_success:
+                return False
+            
             time.sleep(3)
             
-            # Click first search result
+            # Click first search result with better error handling
             first_result_selectors = [
                 "[data-testhook='product-card']:first-child",
                 ".product-card:first-child",
-                "[class*='product-card']:first-child"
+                "[class*='product-card']:first-child",
+                "a[href*='/producten/']:first-child"
             ]
             
             for selector in first_result_selectors:
                 try:
-                    first_result = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    first_result.click()
+                    # Wait for search results to load
+                    first_result = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    # Scroll into view
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", first_result)
+                    time.sleep(0.5)
+                    # Wait for clickable
+                    first_result = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                    )
+                    # Try normal click first
+                    try:
+                        first_result.click()
+                    except:
+                        # Fallback to JavaScript click
+                        self.driver.execute_script("arguments[0].click();", first_result)
                     time.sleep(2)
                     return True
                 except:
@@ -165,8 +270,49 @@ class CartAutomation:
             print(f"   ⚠️ Search failed: {e}")
             return False
     
+    def _close_notification_popup(self):
+        """Close notification popup if present"""
+        try:
+            # Look for the close button with data-testid
+            close_button = WebDriverWait(self.driver, 2).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, 
+                    "button[data-testid='notification-tooltip-close']"))
+            )
+            if close_button.is_displayed():
+                close_button.click()
+                time.sleep(0.5)
+                print("   ✅ Closed notification popup")
+                return True
+        except:
+            pass
+        
+        # Try alternative selectors
+        try:
+            close_selectors = [
+                "button[aria-label='Sluiten']",
+                "button.close",
+                ".notification-tooltip button",
+                "[class*='close'] button"
+            ]
+            for selector in close_selectors:
+                try:
+                    close_button = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if close_button.is_displayed():
+                        close_button.click()
+                        time.sleep(0.5)
+                        return True
+                except:
+                    continue
+        except:
+            pass
+        
+        return False
+    
     def _add_to_cart(self) -> bool:
         """Add product to cart on current product page"""
+        # Close any notification popup first
+        self._close_notification_popup()
+        
         add_button_selectors = [
             # Prefer SVG plus button
             "svg.plus-button_icon__cSPiv",
@@ -210,6 +356,10 @@ class CartAutomation:
                         self.driver.execute_script("arguments[0].click();", add_button)
                     
                     time.sleep(1)  # Wait for cart to update
+                    
+                    # Close notification popup if it appears after clicking
+                    self._close_notification_popup()
+                    
                     return True
             except (TimeoutException, NoSuchElementException):
                 continue
@@ -253,28 +403,50 @@ class CartAutomation:
         for i, product in enumerate(products, 1):
             title = product.get("title", "Unknown product")
             product_url = product.get("product_url", "")
+            # Priority: promotion_quantity > quantity > 1
+            quantity = product.get("promotion_quantity") or product.get("quantity", 1)
             
-            print(f"\n[{i}/{len(products)}] {title}")
+            quantity_text = f" x{quantity}" if quantity > 1 else ""
+            print(f"\n[{i}/{len(products)}] {title}{quantity_text}")
             
-            success = False
+            # Add product multiple times if quantity > 1
+            success_count = 0
+            for qty in range(quantity):
+                success = False
+                
+                # Method 1: If URL exists, access directly
+                if product_url:
+                    if self._find_product_by_url(product_url):
+                        success = self._add_to_cart()
+                
+                # Method 2: If no URL or method 1 failed, try search
+                if not success:
+                    if self._find_product_by_search(title):
+                        success = self._add_to_cart()
+                
+                if success:
+                    success_count += 1
+                    if quantity > 1:
+                        print(f"   ✅ Added {success_count}/{quantity} to cart")
+                    # Short delay between multiple additions
+                    if qty < quantity - 1:
+                        time.sleep(0.5)
             
-            # Method 1: If URL exists, access directly
-            if product_url:
-                if self._find_product_by_url(product_url):
-                    success = self._add_to_cart()
-            
-            # Method 2: If no URL or method 1 failed, try search
-            if not success:
-                if self._find_product_by_search(title):
-                    success = self._add_to_cart()
-            
-            if success:
-                added_count += 1
-                print(f"   ✅ Added to cart")
+            if success_count == quantity:
+                added_count += quantity
+                if quantity == 1:
+                    print(f"   ✅ Added to cart")
                 if progress_callback:
                     progress_callback(title, True)
+            elif success_count > 0:
+                # Partially added
+                failed_products.append(f"{title} (only {success_count}/{quantity} added)")
+                print(f"   ⚠️ Partially added ({success_count}/{quantity})")
+                added_count += success_count
+                if progress_callback:
+                    progress_callback(title, False)
             else:
-                failed_products.append(title)
+                failed_products.append(f"{title}{quantity_text}")
                 print(f"   ❌ Failed to add")
                 if progress_callback:
                     progress_callback(title, False)

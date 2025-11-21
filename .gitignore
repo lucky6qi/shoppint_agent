@@ -24,6 +24,9 @@ shopping_history.json
 products_cache.json
 *.json.bak
 
+# Environment variables
+.env
+
 # Chrome/WebDriver
 chromedriver
 geckodriver
